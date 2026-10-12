@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="hi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>City Mapper</title>
+<style>
+:root{--bg:#f6f5f1;--pn:#fff;--tx:#1d1d1b;--mu:#6b6a64;--bd:#d9d7ce;--ac:#1f6feb;--cv:#eceae2;--gr:#d8d6cc;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17181a;--pn:#212326;--tx:#ececea;--mu:#9a9a94;--bd:#383a3e;--ac:#5b9bff;--cv:#1c1e20;--gr:#2c2e32}}
+:root[data-theme="dark"]{--bg:#17181a;--pn:#212326;--tx:#ececea;--mu:#9a9a94;--bd:#383a3e;--ac:#5b9bff;--cv:#1c1e20;--gr:#2c2e32}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--tx);font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;flex-direction:column}
+header{padding:10px 14px;border-bottom:1px solid var(--bd);background:var(--pn);display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+h1{font-size:16px;margin:0}header span{color:var(--mu);font-size:12px}
+main{flex:1;display:flex;min-height:0}
+aside{width:260px;background:var(--pn);border-right:1px solid var(--bd);padding:12px;overflow:auto;display:flex;flex-direction:column;gap:12px}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mu);margin:0 0 6px}
+.tools{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+button,select,input,textarea{font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:6px 8px}
+button{cursor:pointer}button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+input,select,textarea{width:100%}textarea{height:70px;font:11px monospace}
+label.l{display:flex;gap:6px;align-items:center;margin:2px 0}label.l input{width:auto}
+.row{display:flex;gap:6px}.row button{flex:1}
+.st{color:var(--mu);font-size:12px}.st b{color:var(--tx)}
+#wrap{flex:1;position:relative;min-width:0}canvas{width:100%;height:100%;display:block;background:var(--cv);touch-action:none;cursor:crosshair}
+#hint{position:absolute;left:10px;bottom:10px;background:var(--pn);border:1px solid var(--bd);border-radius:8px;padding:4px 10px;font-size:12px;color:var(--mu)}
+@media(max-width:700px){main{flex-direction:column}aside{width:100%;max-height:42%;border-right:0;border-bottom:1px solid var(--bd)}}
+</style></head><body>
+<header><h1>🗺️ City Mapper</h1><span>Roads, zones, buildings aur places draw karo — scroll = zoom, drag = pan</span></header>
+<main>
+<aside>
+<div><h2>Tool</h2><div class="tools" id="tools"></div></div>
+<div><h2>Naam / Type</h2><input id="nm" placeholder="Naam (optional)"><div style="height:6px"></div><select id="kd"></select></div>
+<div class="row"><button id="fin">Finish ⏎</button><button id="und">Undo</button><button id="del">Delete</button></div>
+<div><h2>Layers</h2><div id="lay"></div></div>
+<div><h2>City stats</h2><div class="st" id="st"></div></div>
+<div><h2>Save / Load (JSON)</h2><textarea id="js" placeholder="Export dabao ya JSON paste karke Import karo"></textarea><div class="row" style="margin-top:6px"><button id="ex">Export</button><button id="im">Import</button><button id="cl">Clear</button></div></div>
+</aside>
+<div id="wrap"><canvas id="cv"></canvas><div id="hint"></div></div>
+</main>
+<script>
+const KINDS={
+zone:{residential:'#f2d7a0',commercial:'#f4a6a6',industrial:'#b9b3c9',park:'#9fd18b',water:'#8cc4f0'},
+building:{house:'#d9a066',shop:'#e57c7c',office:'#8aa4d6',school:'#e8c85a',hospital:'#f08fb0'},
+road:{highway:'#e9884a',main:'#f2c14e',street:'#a8a69c'},
+poi:{landmark:'⭐',food:'🍴',hospital:'🏥',school:'🎓',transit:'🚉',shop:'🛍️',park:'🌳'}};
+const RW={highway:9,main:6,street:3};
+const TOOLS=[['pan','✋ Select / Pan'],['road','🛣️ Road'],['zone','🟩 Zone'],['building','🏢 Building'],['poi','📍 Place'],['measure','📏 Measure']];
+const HINT={pan:'Click karke select karo, khali jagah drag = pan',road:'Click = point add, double-click / Finish = khatam',zone:'Click = corner add, double-click / Finish = band karo',building:'Do clicks: ek corner, doosra corner',poi:'Click karke place rakho',measure:'Points click karo = distance; double-click ya Finish = freeze, Esc = clear'};
+let mfrozen=false,F=[],view={x:60,y:60,z:1},tool='pan',cur=[],sel=null,hidden={},mouse=[0,0],drag=null,nid=1;
+const $=id=>document.getElementById(id),cv=$('cv'),ctx=cv.getContext('2d');
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+// UI
+TOOLS.forEach(([k,t])=>{const b=document.createElement('button');b.textContent=t;b.dataset.k=k;b.onclick=()=>setTool(k);$('tools').appendChild(b)});
+['zone','building','road','poi'].forEach(l=>{const d=document.createElement('label');d.className='l';d.innerHTML='<input type="checkbox" checked> '+l;d.firstChild.onchange=e=>{hidden[l]=!e.target.checked;draw()};$('lay').appendChild(d)});
+function fillKinds(t){$('kd').innerHTML=Object.keys(KINDS[t]).map(k=>`<option>${k}</option>`).join('')}
+function setTool(k){cur=[];mfrozen=false;tool=k;sel=null;[...$('tools').children].forEach(b=>b.classList.toggle('on',b.dataset.k===k));$('hint').textContent=HINT[k];if(k!=='pan'&&k!=='measure')fillKinds(k);draw()}
+function save(){try{localStorage.setItem('citymap',JSON.stringify(F))}catch(e){}}
+function load(){try{const s=localStorage.getItem('citymap');if(s)F=JSON.parse(s)}catch(e){}nid=F.reduce((m,f)=>Math.max(m,f.id),0)+1}
+// geometry
+const W=e=>{const r=cv.getBoundingClientRect();return[(e.clientX-r.left-view.x)/view.z,(e.clientY-r.top-view.y)/view.z]};
+const len=p=>p.reduce((s,q,i)=>i?s+Math.hypot(q[0]-p[i-1][0],q[1]-p[i-1][1]):0,0);
+const area=p=>Math.abs(p.reduce((s,q,i)=>{const n=p[(i+1)%p.length];return s+q[0]*n[1]-n[0]*q[1]},0))/2;
+function inPoly(pt,p){let c=false;for(let i=0,j=p.length-1;i<p.length;j=i++){if((p[i][1]>pt[1])!=(p[j][1]>pt[1])&&pt[0]<(p[j][0]-p[i][0])*(pt[1]-p[i][1])/(p[j][1]-p[i][1])+p[i][0])c=!c}return c}
+function dSeg(p,a,b){const dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy||1;let t=Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dy)/l));return Math.hypot(p[0]-a[0]-t*dx,p[1]-a[1]-t*dy)}
+function hit(pt){const tol=8/view.z;for(const t of['poi','road','building','zone']){if(hidden[t])continue;for(let i=F.length-1;i>=0;i--){const f=F[i];if(f.type!==t)continue;
+if(t==='poi'&&Math.hypot(pt[0]-f.pts[0][0],pt[1]-f.pts[0][1])<14/view.z)return f;
+if(t==='road'&&f.pts.some((q,k)=>k&&dSeg(pt,f.pts[k-1],q)<Math.max(tol,RW[f.kind]/2)))return f;
+if((t==='building'||t==='zone')&&inPoly(pt,f.pts))return f}}return null}
+// drawing
+function draw(){const dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;if(cv.width!==w*dpr||cv.height!==h*dpr){cv.width=w*dpr;cv.height=h*dpr}
+ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,cv.width,cv.height);
+ctx.setTransform(dpr*view.z,0,0,dpr*view.z,dpr*view.x,dpr*view.y);
+const x0=-view.x/view.z,y0=-view.y/view.z,x1=x0+w/view.z,y1=y0+h/view.z,g=view.z<.5?200:view.z>2?25:100;
+ctx.strokeStyle=css('--gr');ctx.lineWidth=1/view.z;ctx.beginPath();
+for(let x=Math.floor(x0/g)*g;x<x1;x+=g){ctx.moveTo(x,y0);ctx.lineTo(x,y1)}for(let y=Math.floor(y0/g)*g;y<y1;y+=g){ctx.moveTo(x0,y);ctx.lineTo(x1,y)}ctx.stroke();
+const path=p=>{ctx.beginPath();p.forEach((q,i)=>i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1]))};
+const hl=f=>{if(f.id===sel){ctx.setLineDash([6/view.z,4/view.z]);ctx.strokeStyle=css('--ac');ctx.lineWidth=2.5/view.z;ctx.stroke();ctx.setLineDash([])}};
+for(const f of F){if(hidden[f.type])continue;
+if(f.type==='zone'){path(f.pts);ctx.closePath();ctx.globalAlpha=.7;ctx.fillStyle=KINDS.zone[f.kind];ctx.fill();ctx.globalAlpha=1;hl(f)}}
+for(const f of F){if(hidden[f.type]||f.type!=='building')continue;path(f.pts);ctx.closePath();ctx.fillStyle=KINDS.building[f.kind];ctx.fill();ctx.strokeStyle='rgba(0,0,0,.35)';ctx.lineWidth=1/view.z;ctx.stroke();hl(f)}
+if(!hidden.road){for(const f of F){if(f.type!=='road')continue;path(f.pts);ctx.lineJoin=ctx.lineCap='round';ctx.strokeStyle='rgba(0,0,0,.3)';ctx.lineWidth=RW[f.kind]+2;ctx.stroke()}
+for(const f of F){if(f.type!=='road')continue;path(f.pts);ctx.strokeStyle=KINDS.road[f.kind];ctx.lineWidth=RW[f.kind];ctx.stroke();if(f.id===sel){ctx.strokeStyle=css('--ac');ctx.lineWidth=2/view.z;ctx.setLineDash([6/view.z,4/view.z]);ctx.stroke();ctx.setLineDash([])}}}
+ctx.fillStyle=css('--tx');ctx.textAlign='center';ctx.font=`${12/view.z}px system-ui`;
+for(const f of F){if(hidden[f.type]||!f.name||f.type==='poi')continue;const c=f.type==='road'?f.pts[Math.floor(f.pts.length/2)]:[f.pts.reduce((s,q)=>s+q[0],0)/f.pts.length,f.pts.reduce((s,q)=>s+q[1],0)/f.pts.length];ctx.fillText(f.name,c[0],c[1]-3/view.z)}
+if(!hidden.poi)for(const f of F){if(f.type!=='poi')continue;const[x,y]=f.pts[0];ctx.font=`${20/view.z}px system-ui`;ctx.fillText(KINDS.poi[f.kind],x,y);if(f.id===sel){ctx.strokeStyle=css('--ac');ctx.lineWidth=2/view.z;ctx.beginPath();ctx.arc(x,y-7/view.z,14/view.z,0,7);ctx.stroke()}
+if(f.name){ctx.font=`${11/view.z}px system-ui`;ctx.fillText(f.name,x,y+12/view.z)}}
+if(cur.length){const p=tool==='building'?[cur[0],[mouse[0],cur[0][1]],mouse,[cur[0][0],mouse[1]]]:mfrozen?cur:[...cur,mouse];path(p);if(tool!=='road'&&tool!=='measure')ctx.closePath();ctx.strokeStyle=css('--ac');ctx.lineWidth=2/view.z;ctx.stroke();cur.forEach(q=>{ctx.beginPath();ctx.arc(q[0],q[1],3/view.z,0,7);ctx.fillStyle=css('--ac');ctx.fill()});if(tool==='measure')mlabels(mfrozen?cur:[...cur,mouse])}
+stats()}
+function mlabels(p){const fm=d=>d>=1000?(d/1000).toFixed(2)+' km':Math.round(d)+' m';ctx.font=`bold ${12/view.z}px system-ui`;ctx.textAlign='center';const lb=(t,x,y)=>{const w=ctx.measureText(t).width+8/view.z,h=16/view.z;ctx.fillStyle=css('--pn');ctx.fillRect(x-w/2,y-h/2,w,h);ctx.strokeStyle=css('--ac');ctx.lineWidth=1/view.z;ctx.strokeRect(x-w/2,y-h/2,w,h);ctx.fillStyle=css('--tx');ctx.fillText(t,x,y+4/view.z)};let t=0;for(let i=1;i<p.length;i++){const d=Math.hypot(p[i][0]-p[i-1][0],p[i][1]-p[i-1][1]);t+=d;lb(fm(d),(p[i][0]+p[i-1][0])/2,(p[i][1]+p[i-1][1])/2)}if(p.length>2||mfrozen){const e=p[p.length-1];lb('Total '+fm(t),e[0],e[1]+22/view.z)}}
+function stats(){const c=t=>F.filter(f=>f.type===t);const km=c('road').reduce((s,f)=>s+len(f.pts),0)/1000;const ha=t=>c(t).reduce((s,f)=>s+area(f.pts),0)/1e4;
+$('st').innerHTML=`Roads: <b>${c('road').length}</b> (${km.toFixed(2)} km)<br>Zones: <b>${c('zone').length}</b> (${ha('zone').toFixed(1)} ha)<br>Buildings: <b>${c('building').length}</b><br>Places: <b>${c('poi').length}</b><br>1 unit = 1 m, grid = 100 m`}
+// actions
+function add(f){f.id=nid++;f.name=$('nm').value.trim();f.kind=$('kd').value;F.push(f);save()}
+function finish(){if(tool==='measure'){cur=cur.filter((q,i)=>!i||q[0]!==cur[i-1][0]||q[1]!==cur[i-1][1]);mfrozen=cur.length>1;draw();return}const p=cur.filter((q,i)=>!i||q[0]!==cur[i-1][0]||q[1]!==cur[i-1][1]);if(tool==='road'&&p.length>=2)add({type:'road',pts:p});if(tool==='zone'&&p.length>=3)add({type:'zone',pts:p});cur=[];draw()}
+cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);const pt=W(e);mouse=pt;
+if(e.button===1||e.shiftKey||tool==='pan'){const h=e.button===0&&!e.shiftKey?hit(pt):null;if(tool==='pan'&&e.button===0){sel=h?h.id:null;if(h){$('nm').value=h.name||'';fillKinds(h.type);$('kd').value=h.kind}}if(!h||e.button===1||e.shiftKey)drag={sx:e.clientX,sy:e.clientY,vx:view.x,vy:view.y};draw();return}
+if(tool==='measure'){if(mfrozen){cur=[];mfrozen=false}cur.push(pt)}
+else if(tool==='poi'){add({type:'poi',pts:[pt]})}
+else if(tool==='building'){if(!cur.length)cur=[pt];else{const a=cur[0];add({type:'building',pts:[a,[pt[0],a[1]],pt,[a[0],pt[1]]]});cur=[]}}
+else cur.push(pt);draw()});
+cv.addEventListener('pointermove',e=>{mouse=W(e);if(drag){view.x=drag.vx+e.clientX-drag.sx;view.y=drag.vy+e.clientY-drag.sy}draw()});
+cv.addEventListener('pointerup',()=>drag=null);
+cv.addEventListener('dblclick',()=>{if(tool==='road'||tool==='zone'||tool==='measure')finish()});
+cv.addEventListener('wheel',e=>{e.preventDefault();const r=cv.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top,z=Math.max(.15,Math.min(8,view.z*(e.deltaY<0?1.15:1/1.15)));view.x=mx-(mx-view.x)*z/view.z;view.y=my-(my-view.y)*z/view.z;view.z=z;draw()},{passive:false});
+$('fin').onclick=finish;
+$('und').onclick=()=>{if(cur.length)cur.pop();else{F.pop();save()}draw()};
+$('del').onclick=()=>{if(sel){F=F.filter(f=>f.id!==sel);sel=null;save();draw()}};
+$('nm').oninput=e=>{const f=F.find(f=>f.id===sel);if(f){f.name=e.target.value;save();draw()}};
+$('kd').onchange=e=>{const f=F.find(f=>f.id===sel);if(f){f.kind=e.target.value;save();draw()}};
+$('ex').onclick=()=>{$('js').value=JSON.stringify(F);$('js').select()};
+$('im').onclick=()=>{try{const d=JSON.parse($('js').value);if(Array.isArray(d)){F=d;nid=F.reduce((m,f)=>Math.max(m,f.id||0),0)+1;save();draw()}}catch(e){$('js').value='Invalid JSON'}};
+$('cl').onclick=()=>{F=[];sel=null;cur=[];save();draw()};
+addEventListener('keydown',e=>{if(e.target.matches('input,textarea,select'))return;if(e.key==='Enter')finish();if(e.key==='Escape'){cur=[];mfrozen=false;draw()}if(e.key==='Delete'||e.key==='Backspace')$('del').click()});
+addEventListener('resize',draw);
+load();setTool('pan');
+</script></body></html>
